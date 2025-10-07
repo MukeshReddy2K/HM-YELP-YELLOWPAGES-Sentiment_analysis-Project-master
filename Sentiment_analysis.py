@@ -188,10 +188,6 @@ def run():
     rank_by_score.to_csv(OUTPUT_PATH / "ranking_by_sentiment_score.csv", index=False)
     corr.to_csv(OUTPUT_PATH / "correlations.csv")
 
-    top_all.to_csv(OUTPUT_PATH / "top_terms_all.csv", index=False)
-    top_pos.to_csv(OUTPUT_PATH / "top_terms_positive.csv", index=False)
-    top_neg.to_csv(OUTPUT_PATH / "top_terms_negative.csv", index=False)
-
     plot_distribution(df["sentiment_label"], "Overall Sentiment Distribution", "plot_overall_sentiment.png")
     plot_distribution(df["location"], "Review count by location", "plot_reviews_by_location.png")
 
