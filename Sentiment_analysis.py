@@ -16,60 +16,45 @@ from textblob import TextBlob
 from sklearn.feature_extraction.text import TfidfVectorizer
 import matplotlib.pyplot as plt
 
-# Try to import transformers. If not available or model cannot be loaded, we will fallback.
 TRANSFORMERS_OK = True
 try:
     from transformers import pipeline as hf_pipeline
 except Exception:
     TRANSFORMERS_OK = False
 
-# --------- Handle SSL issues quietly for NLTK downloads ---------
 try:
     _create_unverified_https_context = ssl._create_unverified_context
     ssl._create_default_https_context = _create_unverified_https_context
 except Exception:
     pass
 
-# --------- NLTK resources ---------
 for pkg in ["punkt", "stopwords"]:
     try:
         nltk.download(pkg, quiet=True)
     except Exception:
         pass
 
-# --------- Paths ---------
 BASE_PATH = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 DATA_PATH = BASE_PATH / "Data"
 OUTPUT_PATH = BASE_PATH / "OutPuts"
 OUTPUT_PATH.mkdir(exist_ok=True, parents=True)
 
 
-# =====================================================
-# Utilities
-# =====================================================
 def clean_text(text: str) -> str:
     if pd.isna(text):
         return ""
     text = text.lower()
-    # Remove urls and emails
     text = re.sub(r"http\S+|www\S+|[\w\.-]+@[\w\.-]+", " ", text)
-    # Replace non letters with space
     text = re.sub(r"[^a-z\s]", " ", text)
-    # Collapse spaces
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
 def load_data() -> pd.DataFrame:
-    """
-    Expect file at ./data/totaldata.csv with columns:
-      rating, review, location
-    """
     fp = DATA_PATH / "totaldata.csv"
     if not fp.exists():
         raise FileNotFoundError(f"Could not find {fp}. Place totaldata.csv under the data folder.")
     df = pd.read_csv(fp)
-    # Normalize column names
     df.columns = [c.lower().strip() for c in df.columns]
     expected = {"rating", "review", "location"}
     if not expected.issubset(set(df.columns)):
@@ -78,9 +63,6 @@ def load_data() -> pd.DataFrame:
 
 
 def try_load_transformer() -> Optional[object]:
-    """
-    Try to load a fast, small, sentiment model. Return a transformers pipeline or None.
-    """
     if not TRANSFORMERS_OK:
         return None
     try:
@@ -91,10 +73,6 @@ def try_load_transformer() -> Optional[object]:
 
 
 def score_sentiment_transformer(texts, clf) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Use HF pipeline. Returns (labels, scores).
-    Truncate long text to 512 chars for speed.
-    """
     labels = []
     scores = []
     for t in texts:
@@ -109,9 +87,6 @@ def score_sentiment_transformer(texts, clf) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def score_sentiment_textblob(texts) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    TextBlob fallback. Polarity in [-1,1]. Map to labels.
-    """
     labels = []
     scores = []
     for t in texts:
@@ -133,9 +108,6 @@ def score_sentiment_textblob(texts) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def add_basic_stats(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Adds length based features and a cleaned_text column.
-    """
     df["review"] = df["review"].astype(str)
     df["cleaned_text"] = df["review"].apply(clean_text)
     df["char_len"] = df["review"].str.len()
@@ -144,22 +116,16 @@ def add_basic_stats(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def aspect_ngrams(df: pd.DataFrame, label_filter: Optional[str] = None, top_k: int = 20) -> pd.DataFrame:
-    """
-    Get top unigrams and bigrams as proxy for common aspects.
-    Optionally filter by sentiment label.
-    """
     sub = df if label_filter is None else df[df["sentiment_label"] == label_filter]
     corpus = sub["cleaned_text"].tolist()
     if len(corpus) == 0:
         return pd.DataFrame(columns=["term", "score"])
 
-    # Use TFIDF for unigrams and bigrams
     sw = set(stopwords.words("english"))
     vec = TfidfVectorizer(ngram_range=(1, 2), min_df=2, stop_words=sw)
     try:
         X = vec.fit_transform(corpus)
     except ValueError:
-        # Not enough text
         return pd.DataFrame(columns=["term", "score"])
     scores = np.asarray(X.sum(axis=0)).ravel()
     terms = np.array(vec.get_feature_names_out())
@@ -175,11 +141,9 @@ def plot_distribution(series: pd.Series, title: str, fname: str):
 
 
 def run():
-    # Load
     df = load_data()
     df = add_basic_stats(df)
 
-    # Sentiment
     clf = try_load_transformer()
     if clf is not None:
         labels, scores = score_sentiment_transformer(df["cleaned_text"].tolist(), clf)
@@ -191,11 +155,9 @@ def run():
     df["sentiment_label"] = labels
     df["sentiment_score"] = scores
 
-    # Overall summaries
     overall_dist = df["sentiment_label"].value_counts(normalize=True).rename_axis("sentiment").reset_index(name="pct")
     overall_dist["pct"] = (overall_dist["pct"] * 100).round(2)
 
-    # By location summaries
     by_loc = (
         df.groupby("location")
           .agg(
@@ -209,21 +171,16 @@ def run():
           )
           .reset_index()
     )
-    # Rankings
     rank_by_pos = by_loc.sort_values(["pos_pct", "avg_rating", "n_reviews"], ascending=[False, False, False]).reset_index(drop=True)
     rank_by_score = by_loc.sort_values(["avg_sentiment_score", "avg_rating", "n_reviews"], ascending=[False, False, False]).reset_index(drop=True)
 
-    # Correlation between numeric rating and sentiment score
-    # Clean rating to numeric
     df["rating_num"] = pd.to_numeric(df["rating"], errors="coerce")
     corr = df[["rating_num", "sentiment_score", "word_len", "char_len"]].corr(numeric_only=True)
 
-    # Aspects
     top_all = aspect_ngrams(df, None, top_k=25)
     top_pos = aspect_ngrams(df, "POSITIVE", top_k=15)
     top_neg = aspect_ngrams(df, "NEGATIVE", top_k=15)
 
-    # Save outputs
     df.to_csv(OUTPUT_PATH / "reviews_with_sentiment.csv", index=False)
     overall_dist.to_csv(OUTPUT_PATH / "overall_sentiment_distribution.csv", index=False)
     by_loc.to_csv(OUTPUT_PATH / "by_location_summary.csv", index=False)
@@ -235,11 +192,9 @@ def run():
     top_pos.to_csv(OUTPUT_PATH / "top_terms_positive.csv", index=False)
     top_neg.to_csv(OUTPUT_PATH / "top_terms_negative.csv", index=False)
 
-    # Plots
     plot_distribution(df["sentiment_label"], "Overall Sentiment Distribution", "plot_overall_sentiment.png")
     plot_distribution(df["location"], "Review count by location", "plot_reviews_by_location.png")
 
-    # Print a short report
     print("\n=== Quick Report ===")
     print(f"Engine used: {engine}")
     if not overall_dist.empty:
